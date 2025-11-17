@@ -42,6 +42,13 @@ export default function App() {
     date: new Date().toISOString().split("T")[0],
     workers: ""
   });
+  const [selectedLayers, setSelectedLayers] = useState(new Set());
+  const [submissions, setSubmissions] = useState(() => {
+    try {
+      const raw = localStorage.getItem("submissions");
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) { return []; }
+  });
 
   const geoRef = useRef(null);
   const fitDone = useRef(false);
@@ -125,14 +132,40 @@ export default function App() {
             baseStyle.fillColor = "url(#stripe-green)";
             baseStyle.fill = true;
           }
+          // apply selection highlight
+          if (selectedLayers && selectedLayers.has(f.properties.id)) {
+            baseStyle.weight = Math.max(baseStyle.weight || 2, 3);
+            baseStyle.color = "#fbbf24";
+          }
           return baseStyle;
         },
         onEachFeature: (f, lyr) => {
           // Tek sol tık: kademe arttır (drag modda değilse)
+          // Ctrl+Click toggles selection for submit
           lyr.on("click", (e) => {
             if (modeRef.current) return;
             if (e.originalEvent?.button !== 0) return;
             e.originalEvent.stopPropagation();
+            const id = f.properties.id;
+            const isSelectToggle = e.originalEvent?.ctrlKey || e.originalEvent?.metaKey;
+            if (isSelectToggle) {
+              // Only allow selecting features that are DONE (full/green)
+              if (f.properties.status !== "full") {
+                return; // ignore selection for non-full features
+              }
+              const next = new Set(selectedLayers);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              setSelectedLayers(next);
+              // visual update
+              const selected = next.has(id);
+              lyr.setStyle({
+                ...STYLE[f.properties.status],
+                weight: selected ? 4 : (f.properties.status === "todo" ? 2 : 3),
+                color: selected ? "#fbbf24" : STYLE[f.properties.status].color
+              });
+              return;
+            }
             advanceOneStep(lyr, false);
           });
 
@@ -155,8 +188,9 @@ export default function App() {
 
           // Görsel hover
           lyr.on("mouseover", () => {
+            const sel = selectedLayers.has(f.properties.id);
             const baseStyle = { ...STYLE[f.properties.status] };
-            baseStyle.weight = f.properties.status === "todo" ? 2 : 3;
+            baseStyle.weight = sel ? 4 : (f.properties.status === "todo" ? 2 : 3);
             if (f.properties.status === "half") {
               baseStyle.fillColor = "url(#stripe-orange)";
               baseStyle.fill = true;
@@ -164,9 +198,11 @@ export default function App() {
               baseStyle.fillColor = "url(#stripe-green)";
               baseStyle.fill = true;
             }
+            if (sel) baseStyle.color = "#fbbf24";
             lyr.setStyle(baseStyle);
           });
           lyr.on("mouseout", () => {
+            const sel = selectedLayers.has(f.properties.id);
             const baseStyle = { ...STYLE[f.properties.status] };
             if (f.properties.status === "half") {
               baseStyle.fillColor = "url(#stripe-orange)";
@@ -174,6 +210,10 @@ export default function App() {
             } else if (f.properties.status === "full") {
               baseStyle.fillColor = "url(#stripe-green)";
               baseStyle.fill = true;
+            }
+            if (sel) {
+              baseStyle.weight = 3;
+              baseStyle.color = "#fbbf24";
             }
             lyr.setStyle(baseStyle);
           });
@@ -236,7 +276,7 @@ export default function App() {
           geoRef.current = null;
         }
       };
-    }, [fc, map]);
+    }, [fc, map, selectedLayers]);
 
     return null;
   }
@@ -249,6 +289,7 @@ export default function App() {
       l.unbindTooltip();
     });
     setStats(p => ({ ...p, half: 0, full: 0 }));
+    setSelectedLayers(new Set());
     setShowResetConfirm(false);
   };
 
@@ -274,11 +315,17 @@ export default function App() {
     const wb = XLSX.utils.book_new();
     
     // Sheet 1: Summary
+    // Work Amount should reflect the number of DONE tables (full)
+    const workAmount = stats.full || 0;
+    // Keep selectedIds for marking selected rows (Ctrl+Click selection)
+    const selectedIds = selectedLayers ? Array.from(selectedLayers) : [];
+
     const summaryData = [
       ["Summary Information"],
       ["Contractor Name", formData.contractor],
       ["Date", formData.date],
       ["Number of Workers", formData.workers],
+      ["Work Amount", workAmount],
       [],
       ["Statistics"],
       ["Total Tables", stats.total],
@@ -292,11 +339,14 @@ export default function App() {
     XLSX.utils.book_append_sheet(wb, ws1, "Summary");
 
     // Sheet 2: Table Details
-    const ws2 = XLSX.utils.json_to_sheet(tableData);
+    // Mark selected rows in details
+    const detailed = tableData.map(r => ({ ...r, Selected: selectedIds.includes(r.ID) ? "YES" : "" }));
+    const ws2 = XLSX.utils.json_to_sheet(detailed);
     XLSX.utils.book_append_sheet(wb, ws2, "Table Details");
 
     // Download
-    const filename = `Tables_${formData.date}_${formData.contractor}.xlsx`;
+    const safeContractor = (formData.contractor || "contractor").replace(/[^a-z0-9_-]/gi, "_");
+    const filename = `Tables_${formData.date}_${safeContractor}.xlsx`;
     XLSX.writeFile(wb, filename);
     
     setShowSubmitModal(false);
@@ -305,6 +355,66 @@ export default function App() {
       date: new Date().toISOString().split("T")[0],
       workers: ""
     });
+  };
+
+  // Save submission into memory (and localStorage)
+  const saveSubmission = () => {
+    const entry = {
+      contractor: formData.contractor,
+      date: formData.date,
+      workers: formData.workers,
+      workAmount: stats.full || 0,
+      selectedIds: selectedLayers ? Array.from(selectedLayers) : [],
+      stats: { ...stats }
+    };
+    const next = [...submissions, entry];
+    setSubmissions(next);
+    try { localStorage.setItem("submissions", JSON.stringify(next)); } catch (e) {}
+    setShowSubmitModal(false);
+    setFormData({ contractor: "", date: new Date().toISOString().split("T")[0], workers: "" });
+  };
+
+  // Export a saved submission (if provided) or fallback to current export
+  const exportSubmissionToExcel = (submission) => {
+    if (!submission) return exportToExcel();
+
+    const tableData = [];
+    if (geoRef.current) {
+      geoRef.current.eachLayer(l => {
+        tableData.push({
+          ID: l.feature.properties.id,
+          Status: l.feature.properties.status,
+          Percentage: l.feature.properties.status === "half" ? "50%" : (l.feature.properties.status === "full" ? "100%" : "0%")
+        });
+      });
+    }
+
+    const wb = XLSX.utils.book_new();
+    const summaryData = [
+      ["Summary Information"],
+      ["Contractor Name", submission.contractor],
+      ["Date", submission.date],
+      ["Number of Workers", submission.workers],
+      ["Work Amount", submission.workAmount],
+      [],
+      ["Statistics"],
+      ["Total Tables", submission.stats.total],
+      ["Done Tables", submission.stats.full],
+      ["Ongoing Tables", submission.stats.half],
+      ["Remaining Tables", submission.stats.total - submission.stats.half - submission.stats.full],
+      ["Completion %", pct(submission.stats.full, submission.stats.total).toFixed(2) + "%"],
+      ["Ongoing %", pct(submission.stats.half, submission.stats.total).toFixed(2) + "%"]
+    ];
+    const ws1 = XLSX.utils.aoa_to_sheet(summaryData);
+    XLSX.utils.book_append_sheet(wb, ws1, "Summary");
+
+    const detailed = tableData.map(r => ({ ...r, Selected: submission.selectedIds.includes(r.ID) ? "YES" : "" }));
+    const ws2 = XLSX.utils.json_to_sheet(detailed);
+    XLSX.utils.book_append_sheet(wb, ws2, "Table Details");
+
+    const safeContractor = (submission.contractor || "contractor").replace(/[^a-z0-9_-]/gi, "_");
+    const filename = `Tables_${submission.date}_${safeContractor}.xlsx`;
+    XLSX.writeFile(wb, filename);
   };
 
   const percentFull = pct(stats.full, stats.total);
@@ -339,14 +449,22 @@ export default function App() {
             <span className="stat-value">{remaining}</span>
           </div>
 
-          <div className="header-actions">
-            <button onClick={() => setShowSubmitModal(true)} style={{ padding: "4px 10px", borderRadius: 6 }}>
-              Submit
-            </button>
-            <button onClick={reset} style={{ padding: "4px 10px", borderRadius: 6 }}>
-              Reset All
-            </button>
-          </div>
+        </div>
+
+        {/* Centered app title inside header */}
+        <div className="top-title">Table Installation Progress Tracking</div>
+
+        {/* Actions aligned to right: Submit | Export | Reset */}
+        <div className="header-actions">
+          <button onClick={() => setShowSubmitModal(true)} style={{ padding: "6px 12px", borderRadius: 6 }}>
+            Submit Daily Work
+          </button>
+          <button onClick={() => { if (submissions && submissions.length) exportSubmissionToExcel(submissions[submissions.length-1]); else exportToExcel(); }} style={{ padding: "6px 12px", borderRadius: 6 }}>
+            Export
+          </button>
+          <button onClick={reset} style={{ padding: "6px 12px", borderRadius: 6 }}>
+            Reset All
+          </button>
         </div>
       </div>
 
@@ -368,7 +486,7 @@ export default function App() {
       {showSubmitModal && (
         <div className="modal-overlay">
           <div className="modal">
-            <h2>Submit Work Report</h2>
+            <h2>Daily Work Report</h2>
             <div className="form-group">
               <label>Contractor Name:</label>
               <input
@@ -396,8 +514,18 @@ export default function App() {
                 min="1"
               />
             </div>
+            <div className="form-group">
+              <label>Work Amount (done count):</label>
+              <div style={{ padding: '8px 12px', border: '1px solid #e5e7eb', borderRadius: 6, background: '#f9fafb' }}>
+                {stats.full}
+              </div>
+            </div>
+            {/* Note: selection must be DONE (green) to be counted. Use Ctrl+Click on finished tables to select. */}
+            <div className="form-group">
+              <div style={{ color: '#6b7280', fontSize: 13 }}>Select only tables that are DONE (green) using Ctrl+Click; only selected DONE tables are counted.</div>
+            </div>
             <div className="modal-actions">
-              <button onClick={exportToExcel}>Export to Excel</button>
+              <button onClick={() => { saveSubmission(); }}>Submit</button>
               <button onClick={() => setShowSubmitModal(false)}>Cancel</button>
             </div>
           </div>
