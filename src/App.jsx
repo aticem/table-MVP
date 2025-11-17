@@ -2,6 +2,12 @@ import React, { useEffect, useState, useRef } from "react";
 import { MapContainer, useMap } from "react-leaflet";
 import L from "leaflet";
 import * as XLSX from "xlsx";
+import { Chart, registerables } from "chart.js";
+import ChartDataLabels from "chartjs-plugin-datalabels";
+import ExcelJS from "exceljs";
+
+Chart.register(...registerables);
+Chart.register(ChartDataLabels);
 
 /* Stil seti */
 const STYLE = {
@@ -52,12 +58,30 @@ export default function App() {
 
   const geoRef = useRef(null);
   const fitDone = useRef(false);
+  const selectedLayersRef = useRef(new Set());
+  const chartRef = useRef(null);
+  const chartCanvasRef = useRef(null);
 
   // Drag durumu
   const modeRef = useRef(null); // null | 'paint' | 'erase'
   const buttonsRef = useRef(0);
   const paintedThisDragRef = useRef(new Set());
   const erasedThisDragRef = useRef(new Set());
+  
+  // Keep ref in sync with state
+  useEffect(() => {
+    selectedLayersRef.current = selectedLayers;
+  }, [selectedLayers]);
+
+  // Cleanup chart on unmount
+  useEffect(() => {
+    return () => {
+      if (chartRef.current) {
+        chartRef.current.destroy();
+      }
+    };
+  }, []);
+
 
   useEffect(() => {
     fetch("/tables.geojson")
@@ -132,11 +156,6 @@ export default function App() {
             baseStyle.fillColor = "url(#stripe-green)";
             baseStyle.fill = true;
           }
-          // apply selection highlight
-          if (selectedLayers && selectedLayers.has(f.properties.id)) {
-            baseStyle.weight = Math.max(baseStyle.weight || 2, 3);
-            baseStyle.color = "#fbbf24";
-          }
           return baseStyle;
         },
         onEachFeature: (f, lyr) => {
@@ -146,26 +165,7 @@ export default function App() {
             if (modeRef.current) return;
             if (e.originalEvent?.button !== 0) return;
             e.originalEvent.stopPropagation();
-            const id = f.properties.id;
-            const isSelectToggle = e.originalEvent?.ctrlKey || e.originalEvent?.metaKey;
-            if (isSelectToggle) {
-              // Only allow selecting features that are DONE (full/green)
-              if (f.properties.status !== "full") {
-                return; // ignore selection for non-full features
-              }
-              const next = new Set(selectedLayers);
-              if (next.has(id)) next.delete(id);
-              else next.add(id);
-              setSelectedLayers(next);
-              // visual update
-              const selected = next.has(id);
-              lyr.setStyle({
-                ...STYLE[f.properties.status],
-                weight: selected ? 4 : (f.properties.status === "todo" ? 2 : 3),
-                color: selected ? "#fbbf24" : STYLE[f.properties.status].color
-              });
-              return;
-            }
+            // Normal click: advance status (todo -> half -> full)
             advanceOneStep(lyr, false);
           });
 
@@ -186,37 +186,6 @@ export default function App() {
             }
           });
 
-          // Görsel hover
-          lyr.on("mouseover", () => {
-            const sel = selectedLayers.has(f.properties.id);
-            const baseStyle = { ...STYLE[f.properties.status] };
-            baseStyle.weight = sel ? 4 : (f.properties.status === "todo" ? 2 : 3);
-            if (f.properties.status === "half") {
-              baseStyle.fillColor = "url(#stripe-orange)";
-              baseStyle.fill = true;
-            } else if (f.properties.status === "full") {
-              baseStyle.fillColor = "url(#stripe-green)";
-              baseStyle.fill = true;
-            }
-            if (sel) baseStyle.color = "#fbbf24";
-            lyr.setStyle(baseStyle);
-          });
-          lyr.on("mouseout", () => {
-            const sel = selectedLayers.has(f.properties.id);
-            const baseStyle = { ...STYLE[f.properties.status] };
-            if (f.properties.status === "half") {
-              baseStyle.fillColor = "url(#stripe-orange)";
-              baseStyle.fill = true;
-            } else if (f.properties.status === "full") {
-              baseStyle.fillColor = "url(#stripe-green)";
-              baseStyle.fill = true;
-            }
-            if (sel) {
-              baseStyle.weight = 3;
-              baseStyle.color = "#fbbf24";
-            }
-            lyr.setStyle(baseStyle);
-          });
         }
       }).addTo(map);
 
@@ -276,7 +245,7 @@ export default function App() {
           geoRef.current = null;
         }
       };
-    }, [fc, map, selectedLayers]);
+    }, [fc, map]);
 
     return null;
   }
@@ -290,6 +259,15 @@ export default function App() {
     });
     setStats(p => ({ ...p, half: 0, full: 0 }));
     setSelectedLayers(new Set());
+    // Clear all localStorage data
+    setSubmissions([]);
+    try { 
+      localStorage.removeItem("submissions");
+      // Clear all localStorage if needed
+      localStorage.clear();
+    } catch (e) {
+      console.error("Error clearing localStorage:", e);
+    }
     setShowResetConfirm(false);
   };
 
@@ -359,12 +337,14 @@ export default function App() {
 
   // Save submission into memory (and localStorage)
   const saveSubmission = () => {
+    // Work Amount = number of DONE (green/full) tables
+    const workAmount = stats.full || 0;
+    
     const entry = {
       contractor: formData.contractor,
       date: formData.date,
       workers: formData.workers,
-      workAmount: stats.full || 0,
-      selectedIds: selectedLayers ? Array.from(selectedLayers) : [],
+      workAmount: workAmount,
       stats: { ...stats }
     };
     const next = [...submissions, entry];
@@ -372,6 +352,228 @@ export default function App() {
     try { localStorage.setItem("submissions", JSON.stringify(next)); } catch (e) {}
     setShowSubmitModal(false);
     setFormData({ contractor: "", date: new Date().toISOString().split("T")[0], workers: "" });
+  };
+
+  // Export all daily submissions to Excel - Group by date and sum work amounts, with chart
+  const exportAllSubmissionsToExcel = async () => {
+    if (!submissions || submissions.length === 0) {
+      alert("No daily work records found. Please submit at least one daily work report.");
+      return;
+    }
+
+    // Group submissions by date
+    const dateGroups = {};
+    submissions.forEach(sub => {
+      const date = sub.date || "-";
+      if (!dateGroups[date]) {
+        dateGroups[date] = {
+          totalWorkAmount: 0,
+          contractors: new Set(),
+          workers: []
+        };
+      }
+      dateGroups[date].totalWorkAmount += sub.workAmount || 0;
+      if (sub.contractor) {
+        dateGroups[date].contractors.add(sub.contractor);
+      }
+      if (sub.workers) {
+        dateGroups[date].workers.push(sub.workers);
+      }
+    });
+    
+    // Prepare data for chart and Excel
+    const sortedDates = Object.keys(dateGroups).sort();
+    const chartData = sortedDates.map(date => {
+      const group = dateGroups[date];
+      const contractorsList = Array.from(group.contractors);
+      const firstContractor = contractorsList[0] || "";
+      const contractorShort = firstContractor.substring(0, 2).toUpperCase();
+      const avgWorkers = group.workers.length > 0 
+        ? Math.round(group.workers.reduce((sum, w) => sum + (parseInt(w) || 0), 0) / group.workers.length)
+        : 0;
+      
+      return {
+        date,
+        workAmount: group.totalWorkAmount,
+        contractors: contractorsList.join(", ") || "-",
+        contractorShort,
+        workers: avgWorkers
+      };
+    });
+
+    // Create chart using Chart.js
+    const canvas = chartCanvasRef.current;
+    if (!canvas) {
+      alert("Chart canvas not found. Please refresh the page.");
+      return;
+    }
+
+    const ctx = canvas.getContext("2d");
+    
+    // Destroy previous chart if exists
+    if (chartRef.current) {
+      chartRef.current.destroy();
+    }
+
+    // Create new chart
+    chartRef.current = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: chartData.map(d => d.date),
+        datasets: [{
+          label: "Work Amount",
+          data: chartData.map(d => d.workAmount),
+          backgroundColor: "rgba(37, 99, 235, 0.6)",
+          borderColor: "rgba(37, 99, 235, 1)",
+          borderWidth: 1,
+          maxBarThickness: 50
+        }]
+      },
+      plugins: [ChartDataLabels],
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          datalabels: {
+            anchor: "end",
+            align: "top",
+            formatter: (value, context) => {
+              const data = chartData[context.dataIndex];
+              return `${data.contractorShort}-${data.workers}`;
+            },
+            font: {
+              size: 11,
+              weight: "bold"
+            },
+            color: "#1f2937"
+          },
+          legend: {
+            display: false
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            title: {
+              display: true,
+              text: "Work Amount",
+              font: {
+                size: 18,
+                weight: "bold"
+              },
+              color: "#000000"
+            },
+            ticks: {
+              font: {
+                size: 16,
+                weight: "bold"
+              },
+              color: "#000000"
+            }
+          },
+          x: {
+            title: {
+              display: true,
+              text: "Date",
+              font: {
+                size: 18,
+                weight: "bold"
+              },
+              color: "#000000"
+            },
+            ticks: {
+              maxRotation: 90,
+              minRotation: 90,
+              font: {
+                size: 14,
+                weight: "bold"
+              },
+              color: "#000000"
+            }
+          }
+        },
+        datasets: {
+          bar: {
+            categoryPercentage: 0.6,
+            barPercentage: 0.9
+          }
+        },
+        layout: {
+          padding: {
+            top: 5,
+            bottom: 5,
+            left: 5,
+            right: 5
+          }
+        }
+      }
+    });
+
+    // Wait a bit for chart to render
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Convert canvas to PNG
+    const pngDataUrl = canvas.toDataURL("image/png");
+    
+    // Convert base64 to buffer
+    const base64Data = pngDataUrl.replace(/^data:image\/png;base64,/, "");
+    const bytes = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
+
+    // Create Excel workbook with ExcelJS
+    const workbook = new ExcelJS.Workbook();
+    
+    // Sheet 1: Data
+    const dataSheet = workbook.addWorksheet("Daily Work Records");
+    dataSheet.columns = [
+      { header: "Date", key: "date", width: 15 },
+      { header: "Contractor Name", key: "contractors", width: 30 },
+      { header: "Work Amount", key: "workAmount", width: 15 }
+    ];
+    
+    chartData.forEach(item => {
+      dataSheet.addRow({
+        date: item.date,
+        contractors: item.contractors,
+        workAmount: item.workAmount
+      });
+    });
+
+    // Style header row
+    dataSheet.getRow(1).font = { bold: true };
+    dataSheet.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFE5E7EB" }
+    };
+
+    // Sheet 2: Chart
+    const chartSheet = workbook.addWorksheet("Chart");
+    
+    // Add image to chart sheet
+    const imageId = workbook.addImage({
+      buffer: bytes,
+      extension: "png"
+    });
+
+    chartSheet.addImage(imageId, {
+      tl: { col: 0, row: 0 },
+      ext: { width: 900, height: 500 }
+    });
+
+    // Set column width for chart sheet
+    chartSheet.getColumn(1).width = 120; // ~900px / 7.5
+
+    // Download
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { 
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" 
+    });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `Daily_Work_Records_${new Date().toISOString().split("T")[0]}.xlsx`;
+    link.click();
+    window.URL.revokeObjectURL(url);
   };
 
   // Export a saved submission (if provided) or fallback to current export
@@ -423,6 +625,14 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {/* Hidden canvas for chart generation */}
+      <canvas 
+        ref={chartCanvasRef}
+        id="chartCanvas" 
+        width="900" 
+        height="500" 
+        style={{ position: "absolute", left: "-9999px" }}
+      />
       <div className="header">
         <div className="statsbar">
           {/* Total */}
@@ -459,7 +669,7 @@ export default function App() {
           <button onClick={() => setShowSubmitModal(true)} style={{ padding: "6px 12px", borderRadius: 6 }}>
             Submit Daily Work
           </button>
-          <button onClick={() => { if (submissions && submissions.length) exportSubmissionToExcel(submissions[submissions.length-1]); else exportToExcel(); }} style={{ padding: "6px 12px", borderRadius: 6 }}>
+          <button onClick={exportAllSubmissionsToExcel} style={{ padding: "6px 12px", borderRadius: 6 }}>
             Export
           </button>
           <button onClick={reset} style={{ padding: "6px 12px", borderRadius: 6 }}>
@@ -515,14 +725,13 @@ export default function App() {
               />
             </div>
             <div className="form-group">
-              <label>Work Amount (done count):</label>
-              <div style={{ padding: '8px 12px', border: '1px solid #e5e7eb', borderRadius: 6, background: '#f9fafb' }}>
-                {stats.full}
+              <label>Work Amount (completed/done tables):</label>
+              <div style={{ padding: '8px 12px', border: '1px solid #e5e7eb', borderRadius: 6, background: '#f9fafb', fontWeight: 'bold', fontSize: '18px', color: '#1f2937', textAlign: 'center' }}>
+                {stats.full || 0}
               </div>
             </div>
-            {/* Note: selection must be DONE (green) to be counted. Use Ctrl+Click on finished tables to select. */}
             <div className="form-group">
-              <div style={{ color: '#6b7280', fontSize: 13 }}>Select only tables that are DONE (green) using Ctrl+Click; only selected DONE tables are counted.</div>
+              <div style={{ color: '#6b7280', fontSize: 13 }}>Work Amount shows the number of tables marked as DONE (green). Click once for ongoing (orange), click again for done (green).</div>
             </div>
             <div className="modal-actions">
               <button onClick={() => { saveSubmission(); }}>Submit</button>
