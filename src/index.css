@@ -3,7 +3,7 @@ html, body, #root { height: 100%; margin: 0; }
 .app-shell { height: 100%; display: flex; flex-direction: column; }
 
 /* Üst bar yüksekliği sabit kalsın, haritayı sıkıştırmasın */
-.header { flex: 0 0 auto; display: flex; align-items: center; padding: 8px; gap: 8px; }
+.header { flex: 0 0 auto; display: flex; align-items: center; padding: 12px 14px; gap: 12px; background: rgba(61, 79, 143, 0.85); }
 
 /* Harita alanı kalan tüm yüksekliği alsın */
 .map-wrap { position: relative; flex: 1 1 auto; min-height: 0; }
@@ -11,15 +11,30 @@ html, body, #root { height: 100%; margin: 0; }
 /* Leaflet container tam otursun */
 .leaflet-container { position: absolute; inset: 0; }
 
-/* (Önceden eklediklerimizi koruyoruz) */
-.statsbar { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
-.stat-block { display: grid; grid-template-columns: auto; grid-template-rows: auto auto auto; align-items: center; justify-items: center; gap: 4px; }
-.stat-label { color: #ef4444; font-weight: 800; font-size: 18px; }
-.stat-count { color: #ef4444; font-weight: 800; font-size: 22px; line-height: 1; }
-.badge { min-width: 64px; min-height: 32px; padding: 4px 10px; border: 2px solid #000; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-weight: 900; font-size: 18px; }
-.badge.orange { background: #f59e0b; }
-.badge.green { background: #84cc16; }
+/* Stats */
+.statsbar { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.stat-item { display: flex; align-items: center; gap: 8px; }
+.stat-label { color: #e5e7eb; font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+.stat-value { color: #60a5fa; font-weight: 800; font-size: 18px; }
+.stat-percentage-inline { color: #fbbf24; font-weight: 700; font-size: 13px; }
 .header-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+/* Button */
+button { background: #2563eb; color: white; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s; }
+button:hover { background: #1d4ed8; }
+button:active { transform: scale(0.98); }
+
+/* Modal */
+.modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1); min-width: 400px; }
+.modal h2 { margin: 0 0 16px 0; font-size: 20px; color: #1f2937; }
+.modal p { margin: 0 0 16px 0; color: #6b7280; }
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; margin-bottom: 6px; font-weight: 600; color: #374151; font-size: 14px; }
+.form-group input { width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: inherit; box-sizing: border-box; }
+.form-group input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+.modal-actions button { padding: 8px 16px; }
 
 /* Konfor */
 body { user-select: none; }
