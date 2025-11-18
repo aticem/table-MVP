@@ -62,11 +62,8 @@ export default function App() {
   const chartRef = useRef(null);
   const chartCanvasRef = useRef(null);
 
-  // Drag durumu
-  const modeRef = useRef(null); // null | 'paint' | 'erase'
-  const buttonsRef = useRef(0);
-  const paintedThisDragRef = useRef(new Set());
-  const erasedThisDragRef = useRef(new Set());
+  // Drag / selection box durumu
+  const dragStartRef = useRef(null); // {x,y} client pixels
   
   // Keep ref in sync with state
   useEffect(() => {
@@ -108,33 +105,27 @@ export default function App() {
     setStats(p => ({ ...p, half, full }));
   };
 
-  const pct = (n, d) => (d ? Math.round((n * 100) / d) : 0);
+  // n: done/ongoing sayısı, d: toplam => yüzde (0-100)
+  const pct = (n, d) => (d ? (n * 100) / d : 0);
 
   function Layer({ fc }) {
     const map = useMap();
 
-    const advanceOneStep = (lyr, dragged = false) => {
+    const advanceOneStep = (lyr) => {
       if (!lyr) return;
-      const id = lyr.feature.properties.id;
-      if (dragged && paintedThisDragRef.current.has(id)) return;
 
       const cur = lyr.feature.properties.status || "todo";
       if (cur === "todo") setLayerStatus(lyr, "half");
       else if (cur === "half") setLayerStatus(lyr, "full");
       else return;
-
-      if (dragged) paintedThisDragRef.current.add(id);
       updateStats();
     };
 
-    const eraseOne = (lyr, dragged = false) => {
+    const eraseOne = (lyr) => {
       if (!lyr) return;
-      const id = lyr.feature.properties.id;
-      if (dragged && erasedThisDragRef.current.has(id)) return;
 
       if (lyr.feature.properties.status !== "todo") {
         setLayerStatus(lyr, "todo");
-        if (dragged) erasedThisDragRef.current.add(id);
         updateStats();
       }
     };
@@ -162,30 +153,18 @@ export default function App() {
           // Tek sol tık: kademe arttır (drag modda değilse)
           // Ctrl+Click toggles selection for submit
           lyr.on("click", (e) => {
-            if (modeRef.current) return;
             if (e.originalEvent?.button !== 0) return;
             e.originalEvent.stopPropagation();
             // Normal click: advance status (todo -> half -> full)
-            advanceOneStep(lyr, false);
+            advanceOneStep(lyr);
           });
 
           // Tek sağ tık: 0%
           lyr.on("contextmenu", (e) => {
             e.originalEvent.preventDefault();
             e.originalEvent.stopPropagation?.();
-            if (modeRef.current) return;
-            eraseOne(lyr, false);
+            eraseOne(lyr);
           });
-
-          // Sadece tuş basılıyken hızlı modlar
-          lyr.on("mouseover", () => {
-            if (modeRef.current === "paint" && (buttonsRef.current & 1)) {
-              advanceOneStep(lyr, true);
-            } else if (modeRef.current === "erase" && (buttonsRef.current & 2)) {
-              eraseOne(lyr, true);
-            }
-          });
-
         }
       }).addTo(map);
 
@@ -204,42 +183,119 @@ export default function App() {
       const preventCtx = (e) => e.preventDefault();
       el.addEventListener("contextmenu", preventCtx);
 
+      // Seçim kutusu için basit bir overlay div'i
+      let selectionBoxDiv = null;
+
+      const ensureSelectionBoxDiv = () => {
+        if (selectionBoxDiv) return selectionBoxDiv;
+        const div = document.createElement("div");
+        div.style.position = "absolute";
+        div.style.border = "2px dashed #2563eb";
+        div.style.backgroundColor = "rgba(37,99,235,0.15)";
+        div.style.pointerEvents = "none";
+        div.style.zIndex = 999;
+        div.style.display = "none";
+        el.appendChild(div);
+        selectionBoxDiv = div;
+        return div;
+      };
+
+      const hideSelectionBox = () => {
+        if (selectionBoxDiv) selectionBoxDiv.style.display = "none";
+      };
+
       const onMouseDown = (e) => {
-        buttonsRef.current = e.buttons || 0;
-        if (e.button === 0) modeRef.current = "paint";
-        else if (e.button === 2) modeRef.current = "erase";
-        else return;
-
-        paintedThisDragRef.current = new Set();
-        erasedThisDragRef.current = new Set();
-
+        // 0: sol (select / advance), 2: sağ (unselect / erase)
+        if (e.button !== 0 && e.button !== 2) return;
+        dragStartRef.current = { x: e.clientX, y: e.clientY, button: e.button };
+        const rect = el.getBoundingClientRect();
+        const box = ensureSelectionBoxDiv();
+        box.style.left = `${e.clientX - rect.left}px`;
+        box.style.top = `${e.clientY - rect.top}px`;
+        box.style.width = "0px";
+        box.style.height = "0px";
+        box.style.display = "block";
         map.dragging.disable();
-        el.style.cursor = "crosshair";
       };
 
       const onMouseMove = (e) => {
-        buttonsRef.current = e.buttons || 0;
-        if (buttonsRef.current === 0 && modeRef.current) endDrag();
+        if (!dragStartRef.current) return;
+        const rect = el.getBoundingClientRect();
+        const startX = dragStartRef.current.x - rect.left;
+        const startY = dragStartRef.current.y - rect.top;
+        const curX = e.clientX - rect.left;
+        const curY = e.clientY - rect.top;
+
+        const left = Math.min(startX, curX);
+        const top = Math.min(startY, curY);
+        const width = Math.abs(curX - startX);
+        const height = Math.abs(curY - startY);
+
+        const box = ensureSelectionBoxDiv();
+        box.style.left = `${left}px`;
+        box.style.top = `${top}px`;
+        box.style.width = `${width}px`;
+        box.style.height = `${height}px`;
       };
 
-      const endDrag = () => {
-        modeRef.current = null;
-        buttonsRef.current = 0;
-        paintedThisDragRef.current.clear();
-        erasedThisDragRef.current.clear();
+      const onMouseUp = (e) => {
+        const start = dragStartRef.current;
+        dragStartRef.current = null;
         map.dragging.enable();
-        el.style.cursor = "";
+        hideSelectionBox();
+
+        if (!start) return;
+
+        // Çok küçük hareketse: normal tık gibi kalsın (hiçbir şey yapma)
+        const dx = Math.abs(e.clientX - start.x);
+        const dy = Math.abs(e.clientY - start.y);
+        if (dx < 5 && dy < 5) return;
+
+        const rect = el.getBoundingClientRect();
+        const startPt = L.point(start.x - rect.left, start.y - rect.top);
+        const endPt = L.point(e.clientX - rect.left, e.clientY - rect.top);
+
+        const minX = Math.min(startPt.x, endPt.x);
+        const maxX = Math.max(startPt.x, endPt.x);
+        const minY = Math.min(startPt.y, endPt.y);
+        const maxY = Math.max(startPt.y, endPt.y);
+
+        const sw = map.containerPointToLatLng(L.point(minX, maxY));
+        const ne = map.containerPointToLatLng(L.point(maxX, minY));
+        const bounds = L.latLngBounds(sw, ne);
+
+        if (!geoRef.current) return;
+
+        const isRightButton = start.button === 2;
+
+        geoRef.current.eachLayer((lyr) => {
+          if (!lyr.getBounds) return;
+          const center = lyr.getBounds().getCenter();
+          if (!bounds.contains(center)) return;
+
+          if (isRightButton) {
+            // Sağ tuş: sanki tek tek sağ tıklıyormuş gibi reset
+            eraseOne(lyr);
+          } else {
+            // Sol tuş: sanki tek tek sol tıklıyormuş gibi kademe arttır
+            advanceOneStep(lyr);
+          }
+        });
       };
 
       el.addEventListener("mousedown", onMouseDown);
       el.addEventListener("mousemove", onMouseMove);
-      window.addEventListener("mouseup", endDrag);
+      window.addEventListener("mouseup", onMouseUp);
 
       return () => {
         el.removeEventListener("contextmenu", preventCtx);
         el.removeEventListener("mousedown", onMouseDown);
         el.removeEventListener("mousemove", onMouseMove);
-        window.removeEventListener("mouseup", endDrag);
+        window.removeEventListener("mouseup", onMouseUp);
+        if (selectionBoxDiv && selectionBoxDiv.parentNode) {
+          selectionBoxDiv.parentNode.removeChild(selectionBoxDiv);
+          selectionBoxDiv = null;
+        }
         if (geoRef.current) {
           geoRef.current.removeFrom(map);
           geoRef.current = null;
@@ -644,13 +700,13 @@ export default function App() {
           {/* Done: Sayı, Yüzde */}
           <div className="stat-item">
             <span className="stat-label">Done:</span>
-            <span className="stat-value">{stats.full}, <span className="stat-percentage-inline">%{(percentFull / 100).toFixed(2)}</span></span>
+            <span className="stat-value">{stats.full}, <span className="stat-percentage-inline">%{percentFull.toFixed(2)}</span></span>
           </div>
 
           {/* Ongoing: Sayı, Yüzde */}
           <div className="stat-item">
             <span className="stat-label">Ongoing:</span>
-            <span className="stat-value">{stats.half}, <span className="stat-percentage-inline">%{(percentHalf / 100).toFixed(2)}</span></span>
+            <span className="stat-value">{stats.half}, <span className="stat-percentage-inline">%{percentHalf.toFixed(2)}</span></span>
           </div>
 
           {/* Remaining */}
