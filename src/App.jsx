@@ -85,6 +85,16 @@ export default function App() {
       .then(r => r.json())
       .then(fc => {
         fc.features.forEach((f, i) => {
+          // LineString olarak gelen masaları Polygon'a çevir ki tüm yüzey tıklanabilir olsun
+          if (f.geometry && f.geometry.type === "LineString") {
+            const coords = f.geometry.coordinates;
+            if (Array.isArray(coords) && coords.length >= 4) {
+              f.geometry = {
+                type: "Polygon",
+                coordinates: [coords]
+              };
+            }
+          }
           f.properties.id = f.properties.id || `F${i}`;
           f.properties.status = f.properties.status || "todo";
         });
@@ -270,8 +280,10 @@ export default function App() {
 
         geoRef.current.eachLayer((lyr) => {
           if (!lyr.getBounds) return;
-          const center = lyr.getBounds().getCenter();
-          if (!bounds.contains(center)) return;
+
+          // Merkeze göre değil, masanın alanı kutuyla kesişiyor mu ona bak
+          const lb = lyr.getBounds();
+          if (!bounds.intersects(lb)) return;
 
           if (isRightButton) {
             // Sağ tuş: sanki tek tek sağ tıklıyormuş gibi reset

@@ -55,6 +55,7 @@ html, body, #root {
 	border-radius: 14px;
 	overflow: hidden;
 	box-shadow: 0 24px 80px rgba(15, 23, 42, 0.95);
+	cursor: default; /* klasik ok */
 }
 
 /* Stats */
