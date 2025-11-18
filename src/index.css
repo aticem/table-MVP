@@ -8,9 +8,10 @@ html, body, #root { height: 100%; margin: 0; }
 	left: 50%;
 	top: 50%;
 	transform: translate(-50%, -50%);
-	font-size: 18px;
-	font-weight: 800;
+	font-size: 22px;
+	font-weight: 900;
 	color: #ffffff;
+	letter-spacing: 0.5px;
 	pointer-events: none;
 }
 
@@ -24,11 +25,11 @@ html, body, #root { height: 100%; margin: 0; }
 .leaflet-container { position: absolute; inset: 0; }
 
 /* Stats */
-.statsbar { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
-.stat-item { display: flex; align-items: center; gap: 8px; }
-.stat-label { color: #e5e7eb; font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
-.stat-value { color: #60a5fa; font-weight: 800; font-size: 18px; }
-.stat-percentage-inline { color: #fbbf24; font-weight: 700; font-size: 13px; }
+.statsbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.stat-item { display: flex; align-items: center; gap: 6px; }
+.stat-label { color: #e5e7eb; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+.stat-value { color: #60a5fa; font-weight: 800; font-size: 16px; }
+.stat-percentage-inline { color: #fbbf24; font-weight: 800; font-size: 16px; }
 .header-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
 /* Button */
