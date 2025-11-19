@@ -62,8 +62,8 @@ html, body, #root {
 .statsbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .stat-item { display: flex; align-items: center; gap: 6px; }
 .stat-label { color: #e5e7eb; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
-.stat-value { color: #60a5fa; font-weight: 800; font-size: 16px; }
-.stat-percentage-inline { color: #fbbf24; font-weight: 800; font-size: 16px; }
+.stat-value { color: #60a5fa; font-weight: 800; font-size: 14px; }
+.stat-percentage-inline { color: #fbbf24; font-weight: 800; font-size: 14px; }
 .header-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
 /* Button */
@@ -85,3 +85,27 @@ button:active { transform: scale(0.98); }
 
 /* Konfor */
 body { user-select: none; }
+
+.panel-stats {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.stat-item.done {
+	background: rgba(16, 185, 129, 0.14);
+	border-radius: 6px;
+	padding: 2px 8px;
+}
+
+.stat-item.ongoing {
+	background: rgba(245, 158, 11, 0.14);
+	border-radius: 6px;
+	padding: 2px 8px;
+}
+
+.status-stats {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}

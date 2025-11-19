@@ -41,6 +41,7 @@ function setLayerStatus(lyr, newStatus) {
 export default function App() {
   const [data, setData] = useState(null);
   const [stats, setStats] = useState({ total: 0, half: 0, full: 0 });
+  const [tableTypes, setTableTypes] = useState({ t27: 0, t54: 0 });
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [formData, setFormData] = useState({
@@ -84,7 +85,15 @@ export default function App() {
     fetch("/tables.geojson")
       .then(r => r.json())
       .then(fc => {
+        // Masa tiplerini say
+        let c27 = 0, c54 = 0;
+
         fc.features.forEach((f, i) => {
+          const layer = f.properties.layer;
+
+          if (layer === "panels_27") c27++;
+          if (layer === "panels_54") c54++;
+
           // LineString olarak gelen masaları Polygon'a çevir ki tüm yüzey tıklanabilir olsun
           if (f.geometry && f.geometry.type === "LineString") {
             const coords = f.geometry.coordinates;
@@ -98,6 +107,8 @@ export default function App() {
           f.properties.id = f.properties.id || `F${i}`;
           f.properties.status = f.properties.status || "todo";
         });
+        // state’e işle
+        setTableTypes({ t27: c27, t54: c54 });
         setData(fc);
         setStats(s => ({ ...s, total: fc.features.length }));
       })
@@ -703,22 +714,30 @@ export default function App() {
       />
       <div className="header">
         <div className="statsbar">
-          {/* Total */}
-          <div className="stat-item">
-            <span className="stat-label">Total:</span>
-            <span className="stat-value">{stats.total}</span>
+          <div className="panel-stats">
+            <div className="stat-item">
+              <span className="stat-label">Table_27:</span>
+              <span className="stat-value">{tableTypes.t27}</span>
+            </div>
+
+            <div className="stat-item">
+              <span className="stat-label">Table_54:</span>
+              <span className="stat-value">{tableTypes.t54}</span>
+            </div>
           </div>
 
-          {/* Done: Sayı, Yüzde */}
-          <div className="stat-item">
-            <span className="stat-label">Done:</span>
-            <span className="stat-value">{stats.full}, <span className="stat-percentage-inline">%{percentFull.toFixed(2)}</span></span>
-          </div>
+          <div className="status-stats">
+            {/* Done: Sayı, Yüzde */}
+            <div className="stat-item done">
+              <span className="stat-label">Done:</span>
+              <span className="stat-value">{stats.full}, <span className="stat-percentage-inline">%{percentFull.toFixed(2)}</span></span>
+            </div>
 
-          {/* Ongoing: Sayı, Yüzde */}
-          <div className="stat-item">
-            <span className="stat-label">Ongoing:</span>
-            <span className="stat-value">{stats.half}, <span className="stat-percentage-inline">%{percentHalf.toFixed(2)}</span></span>
+            {/* Ongoing: Sayı, Yüzde */}
+            <div className="stat-item ongoing">
+              <span className="stat-label">Ongoing:</span>
+              <span className="stat-value">{stats.half}, <span className="stat-percentage-inline">%{percentHalf.toFixed(2)}</span></span>
+            </div>
           </div>
 
           {/* Remaining */}
